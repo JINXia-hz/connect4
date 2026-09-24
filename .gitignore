@@ -1,0 +1,11 @@
+# ML artifacts
+data/
+ml/__pycache__/
+*.pt
+*.pyc
+__pycache__/
+
+# Editor / OS
+*~
+.DS_Store
+Thumbs.db

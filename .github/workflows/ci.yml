@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  prolog-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SWI-Prolog
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y swi-prolog-nox
+
+      - name: Run plunit test suite
+        # Run from the repo root: the suite writes a smoke file to data/
+        run: swipl -g "run_tests,halt(0)" -t "halt(1)" tests/tests.pl
+
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install numpy torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Run ml smoke tests
+        run: python ml/smoke_test.py
