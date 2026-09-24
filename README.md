@@ -1,6 +1,6 @@
 # Connect Four (Puissance 4) — Prolog + ML
 
-[![CI](https://github.com/USER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/USER/REPO/actions/workflows/ci.yml)
+[![CI](https://github.com/JINXia-hz/connect4/actions/workflows/ci.yml/badge.svg)](https://github.com/JINXia-hz/connect4/actions/workflows/ci.yml)
 
 A Connect Four game implemented in SWI-Prolog, featuring a range of AI opponents
 from pure random play to alpha-beta search with transposition tables and MCTS —
