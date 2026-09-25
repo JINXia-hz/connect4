@@ -161,24 +161,26 @@ crashing. In the game menu the NN AI is option 7 (`computer_nn`).
 
 ### Measured results (this machine, benchmark/6 with random first player)
 
-v1/v2 were trained on heuristic-minimax self-play labels; **v3 is trained purely
-on MCTS-teacher data** (200 games at `mcts:400`), so the network learns from
-simulation statistics rather than from the hand-written heuristic.
+v1/v2 were trained on heuristic-minimax self-play labels; **v3+ are trained purely
+on MCTS-teacher data** (v3: 200 games at `mcts:400`; v4: ~700 games accumulated),
+so the network learns from simulation statistics rather than from the
+hand-written heuristic.
 
-| Matchup | v1 (heuristic data) | v2 (heuristic data) | v3 (MCTS data) |
-|---|---|---|---|
-| NN vs Random++ (20 games) | 18–2–0 | 17–2–1 | 17–2–1 |
-| NN vs strong heuristic Minimax (6 games) | 0–6–0 | 0–6–0 | 0–6–0 |
-| NN vs heuristic, **equal depth 3** (40 games, both colors) | — | 0–39–1 | 5–34–1 |
+| Matchup | v1 (heuristic data) | v2 (heuristic data) | v3 (MCTS 200 g) | v4 (MCTS ~700 g) |
+|---|---|---|---|---|
+| NN vs Random++ (20 games) | 18–2–0 | 17–2–1 | 17–2–1 | 18–1–1 |
+| NN vs strong heuristic Minimax (6 games) | 0–6–0 | 0–6–0 | 0–6–0 | 0–6–0 |
+| NN vs heuristic, **equal depth 3** (40 games, both colors) | — | 0–39–1 | 5–34–1 | 7–31–2 |
 
 Honest takeaway: the NN AI reliably beats the random-class opponents, and the
-MCTS teacher visibly improved the learned evaluation (0 → 5 wins against the
-hand-written heuristic at equal search depth, with no hand-crafted features
-involved). The hand-tuned minimax is still stronger overall — it searches at
-adaptive depth 5–7 with quiescence extension and a transposition table, and
-Connect Four is extremely tactical, so a few hundred games of self-play cannot
-yet compensate. The pipeline itself (self-play → train → plug into search →
-benchmark → iterate) works end-to-end and each piece is measurable.
+MCTS teacher steadily improves the learned evaluation (0 → 5 → 7 wins against
+the hand-written heuristic at equal search depth, with no hand-crafted
+features involved), though returns are diminishing at this data scale. The
+hand-tuned minimax is still stronger overall — it searches at adaptive depth
+5–7 with quiescence extension and a transposition table, and Connect Four is
+extremely tactical, so a few hundred games of self-play cannot yet compensate.
+The pipeline itself (self-play → train → plug into search → benchmark →
+iterate) works end-to-end and each piece is measurable.
 
 ### Ideas for going further
 
