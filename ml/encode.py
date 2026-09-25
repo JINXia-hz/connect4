@@ -4,9 +4,11 @@ Board wire format (contract with the Prolog side):
 - A board is a 42-character string, column-major: columns 1..7, each
   column rows 1..6 from bottom (row 1) to top (row 6).
 - Cells are 'x', 'o' or '_' (empty).
-- A position record line is: "<board42> <player> <result>" where player is
-  the side to move ('x'/'o') and result is the final game outcome from that
-  player's perspective: 1 (win), -1 (loss), 0 (draw).
+- A position record line is: "<board42> <player> <result> [<move>]" where player is
+  the side to move ('x'/'o'), result is the final game outcome from that
+  player's perspective: 1 (win), -1 (loss), 0 (draw), and move is the
+  teacher-chosen column 1-7, or '-' when the move was random (policy target
+  unavailable). 3-field legacy lines are value-only.
 
 Tensor encoding: float32 array of shape (2, 6, 7) — [channel][row][col],
 row 0 = bottom. Channel 0 = current player's pieces, channel 1 = opponent's.

@@ -65,18 +65,16 @@ empty_state(Board, Heights) :-
     Heights = [1, 1, 1, 1, 1, 1, 1].
 
 % Game loop: Mark is the side to move, Ply the current ply number.
-% Positions are accumulated (side to move + board) from ply OpenRandom+1 on.
+% Every position is recorded (side to move + board + chosen move);
+% the move is '-' when it came from the random opening or from
+% epsilon-exploration (not usable as a policy target).
 play_game(Board, Heights, Mark, Ply, Spec, Acc, Positions, Winner) :-
     (game_end(Board, Winner) ->
         Positions = Acc
     ;
-        Spec = spec(_, _, _, OpenR),
-        (Ply > OpenR ->
-            Acc1 = [pos(Board, Mark) | Acc]
-        ;
-            Acc1 = Acc
-        ),
-        choose_move(Spec, Mark, Ply, Board, Heights, Col),
+        choose_move(Spec, Mark, Ply, Board, Heights, Col, Source),
+        (Source == ai -> MoveField = Col ; MoveField = '-'),
+        Acc1 = [pos(Board, Mark, MoveField) | Acc],
         simulate_move(Board, Heights, Mark, Col, NewBoard, NewHeights),
         ai_change_player(Mark, NextMark),
         Ply1 is Ply + 1,
@@ -97,28 +95,29 @@ game_end(Board, draw) :-
 
 % Opening plies are uniform random; after that, move randomly with
 % probability Epsilon (exploration), otherwise let the AI play.
-choose_move(Spec, Mark, Ply, Board, Heights, Col) :-
+% Source is 'ai' when the column was chosen by the AI, 'random' otherwise.
+choose_move(Spec, Mark, Ply, Board, Heights, Col, Source) :-
     Spec = spec(P1, P2, Eps, OpenR),
     (Mark == 'x' -> PlayerSpec = P1 ; PlayerSpec = P2),
     (Ply =< OpenR ->
-        random_valid_move(Heights, Col)
+        random_valid_move(Heights, Col), Source = random
     ;
         random(R),
         R < Eps
     ->
-        random_valid_move(Heights, Col)
+        random_valid_move(Heights, Col), Source = random
     ;
-        ai_move(PlayerSpec, Board, Heights, Mark, Col)
+        ai_move(PlayerSpec, Board, Heights, Mark, Col, Source)
     ).
 
 % Heuristic AI: fixed-depth alpha-beta from minimax.pl
-ai_move((heuristic, D), Board, Heights, Mark, Col) :-
+ai_move((heuristic, D), Board, Heights, Mark, Col, ai) :-
     catch(alpha_beta(Board, Heights, Mark, D, -9999999, 9999999, Col0, _), _, fail),
     valid_column(Heights, Col0), !,
     Col = Col0.
 
 % NN AI: fixed-depth alpha-beta with neural evaluation
-ai_move((nn, D), Board, Heights, Mark, Col) :-
+ai_move((nn, D), Board, Heights, Mark, Col, ai) :-
     catch(nn_alpha_beta(Board, Heights, Mark, D, -9999999, 9999999, Col0, _), _, fail),
     valid_column(Heights, Col0), !,
     Col = Col0.
@@ -126,7 +125,7 @@ ai_move((nn, D), Board, Heights, Mark, Col) :-
 % MCTS teacher: D is the iteration count. mcts_play/4 uses player
 % numbers (x=1, o=2), so the mark-based state is converted. Its chatter
 % is suppressed; it cleans its own dynamic state on every call.
-ai_move((mcts, Iters), Board, Heights, Mark, Col) :-
+ai_move((mcts, Iters), Board, Heights, Mark, Col, ai) :-
     mark_to_number(Mark, PlayerNum),
     set_mcts_iterations(Iters),
     catch(with_output_to(atom(_), mcts_play(Board, Heights, PlayerNum, Col0)), _, fail),
@@ -135,7 +134,8 @@ ai_move((mcts, Iters), Board, Heights, Mark, Col) :-
 
 % Robustness: if an AI call fails or returns an invalid column,
 % fall back to a random valid move instead of crashing the batch.
-ai_move(_, _, Heights, _, Col) :-
+% Such a move is not usable as a policy target (Source = random).
+ai_move(_, _, Heights, _, Col, random) :-
     random_valid_move(Heights, Col).
 
 mark_to_number('x', 1).
@@ -156,14 +156,16 @@ valid_column(Heights, Col) :-
 %%%     OUTPUT                          %%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-% One line per recorded position: "<board42> <player> <result>"
+% One line per recorded position: "<board42> <player> <result> <move>"
 % (contract with ml/encode.py: column-major, cols 1..7, rows 1..6 bottom-up;
-% result is from the recorded side-to-move's perspective: 1/-1/0)
+% result is from the recorded side-to-move's perspective: 1/-1/0;
+% move is the AI-chosen column 1..7, or '-' when the move was random
+% (opening / epsilon exploration / AI fallback) - not a policy target)
 write_positions(Stream, Positions, Winner) :-
-    forall(member(pos(Board, Mark), Positions),
+    forall(member(pos(Board, Mark, Move), Positions),
            (result_for(Mark, Winner, Result),
             board_to_str42(Board, Str),
-            format(Stream, '~w ~w ~w~n', [Str, Mark, Result]))).
+            format(Stream, '~w ~w ~w ~w~n', [Str, Mark, Result, Move]))).
 
 result_for(_, draw, 0) :- !.
 result_for(Mark, Winner, 1) :- Mark == Winner, !.

@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from encode import (ROWS, COLS, board_to_grid, encode_board_str,  # noqa: E402
                     grid_to_board_str, prolog_board_to_str)
-from model import Connect4ValueNet  # noqa: E402
+from model import Connect4Net, Connect4ValueNet  # noqa: E402
 
 EMPTY42 = '_' * (ROWS * COLS)
 
@@ -36,10 +36,17 @@ assert np.array_equal(t_x[0], t_o[1]) and np.array_equal(t_x[1], t_o[0])
 prolog_board = [['x', '_', '_', '_', '_', '_']] + [['_'] * ROWS for _ in range(COLS - 1)]
 assert prolog_board_to_str(prolog_board) == s
 
-# Model forward pass: shape and tanh range.
-net = Connect4ValueNet()
-out = net(torch.from_numpy(np.stack([t_x, t_o])))
-assert out.shape == (2,)
-assert bool((out.abs() <= 1.0).all())
+# Model forward pass: dual-head output, shapes and tanh range.
+net = Connect4Net()
+with torch.no_grad():
+    value, policy_logits = net(torch.from_numpy(np.stack([t_x, t_o])))
+assert value.shape == (2,)
+assert bool((value.abs() <= 1.0).all())
+assert policy_logits.shape == (2, COLS)
+probs = torch.softmax(policy_logits, dim=-1)
+assert np.allclose(probs.sum(dim=-1).numpy(), 1.0)
+
+# Old class name still works (alias).
+assert Connect4ValueNet is Connect4Net or issubclass(Connect4ValueNet, Connect4Net)
 
 print('smoke_test: all assertions passed')

@@ -125,66 +125,75 @@ CWD-relative paths are the generated data files (`data/...`).
 
 ## Machine learning: the NN AI
 
-An AlphaZero-lite pipeline: a CNN **value network** (PyTorch) predicts the game
-outcome from the current player's perspective and serves as the leaf evaluation
-of a dedicated alpha-beta search (`src/ai/nn.pl`), replacing the hand-written
-heuristic at shallow depth. Prolog calls Python in-process via SWI-Prolog's
-Janus bridge (`py_call(bridge:eval(Board, Player), Value)`).
+An AlphaZero-lite pipeline: a dual-head CNN (PyTorch) predicts, from the
+current player's perspective, both the game outcome (**value head**, used as
+the leaf evaluation of a dedicated alpha-beta search in `src/ai/nn.pl`) and a
+probability distribution over the 7 columns (**policy head**, used to order
+moves inside the search — better ordering means more alpha-beta cutoffs, so
+the same time budget searches deeper). Prolog calls Python in-process via
+SWI-Prolog's Janus bridge (`py_call(bridge:eval(Board, Player), Value)`,
+`py_call(bridge:policy(Board, Player), Probs)`).
 
 The training loop:
 
 ```sh
-# 1. Generate games with the MCTS teacher (e.g. 800 iterations/move), with
-#    random openings and epsilon-exploration; every position is recorded with
-#    the final result as its label. The NN never learns from the hand-written
-#    heuristic.
+# 1. Generate games with the MCTS teacher, with random openings and
+#    epsilon-exploration. Every position is recorded with the final result
+#    (value label) and the teacher's chosen move (policy label). The NN never
+#    learns from the hand-written heuristic.
 py ml/gen_data.py --games 300 --out data/games_v1.txt \
-    --player1 mcts:800 --player2 mcts:800
+    --player1 mcts:400 --player2 mcts:400 --workers 5
 
-# 2. Train the value network on all data/*.txt.
+# 2. Train both heads on all data/*.txt (loss = value MSE + policy
+#    cross-entropy).
 py ml/train.py
 
 # 3. Iterate: the NN AI now plays itself, generating stronger data; retrain
 #    on the accumulated dataset.
 py ml/gen_data.py --games 200 --out data/games_v2.txt \
-    --player1 nn:3 --player2 nn:3
+    --player1 nn:3 --player2 nn:3 --workers 5
 py ml/train.py
 ```
 
 Player specs for `gen_data.py` are `<kind>:<param>`: `mcts:N` (N iterations
 per move), `heuristic:D` (alpha-beta depth D), `nn:D` (NN search depth D).
+`--workers N` splits the games across N parallel SWI-Prolog processes
+(near-linear speedup; each worker is single-threaded).
 
 The trained model (`ml/model.pt`, git-ignored) is loaded lazily by
-`ml/bridge.py`; evaluations are cached across the search. If Python/torch is
-unavailable, the NN AI falls back to the hand-written heuristic instead of
-crashing. In the game menu the NN AI is option 7 (`computer_nn`).
+`ml/bridge.py`; evaluations and policy queries are cached across the search.
+If Python/torch is unavailable, the NN AI falls back to the hand-written
+heuristic and center-based move ordering instead of crashing. In the game
+menu the NN AI is option 7 (`computer_nn`).
 
 ### Measured results (this machine, benchmark/6 with random first player)
 
-v1/v2 were trained on heuristic-minimax self-play labels; **v3+ are trained purely
-on MCTS-teacher data** (v3: 200 games at `mcts:400`; v4: ~700 games accumulated),
-so the network learns from simulation statistics rather than from the
-hand-written heuristic.
+v1/v2 were trained on heuristic-minimax self-play labels; **v3+ are trained
+purely on MCTS-teacher data**, so the network learns from simulation
+statistics rather than from the hand-written heuristic. v5 adds the policy
+head and policy-guided move ordering.
 
-| Matchup | v1 (heuristic data) | v2 (heuristic data) | v3 (MCTS 200 g) | v4 (MCTS ~700 g) |
+| Matchup | v1–v2 (heuristic data) | v3 (MCTS 200 g) | v4 (MCTS ~700 g) | v5 (+policy head) |
 |---|---|---|---|---|
-| NN vs Random++ (20 games) | 18–2–0 | 17–2–1 | 17–2–1 | 18–1–1 |
-| NN vs strong heuristic Minimax (6 games) | 0–6–0 | 0–6–0 | 0–6–0 | 0–6–0 |
-| NN vs heuristic, **equal depth 3** (40 games, both colors) | — | 0–39–1 | 5–34–1 | 7–31–2 |
+| NN vs Random++ (20 games) | 17–18 wins | 17–2–1 | 18–1–1 | **19–1–0** |
+| NN vs strong heuristic Minimax | 0–6–0 (6 g) | 0–6–0 (6 g) | 0–6–0 (6 g) | **15–5–0 (20 g)** |
+| NN vs heuristic, **equal depth 3** (40 games, both colors) | 0–39–1 | 5–34–1 | 7–31–2 | 9–27–4 |
 
-Honest takeaway: the NN AI reliably beats the random-class opponents, and the
-MCTS teacher steadily improves the learned evaluation (0 → 5 → 7 wins against
-the hand-written heuristic at equal search depth, with no hand-crafted
-features involved), though returns are diminishing at this data scale. The
-hand-tuned minimax is still stronger overall — it searches at adaptive depth
-5–7 with quiescence extension and a transposition table, and Connect Four is
-extremely tactical, so a few hundred games of self-play cannot yet compensate.
-The pipeline itself (self-play → train → plug into search → benchmark →
+The milestone: **v5 is the first version to beat the original hand-tuned
+minimax overall** — 15 wins to 5 over 20 games, despite the minimax searching
+at adaptive depth 5–7 with quiescence extension. The policy head was the key:
+ordering moves by the learned policy prunes the alpha-beta tree so
+effectively that the NN search at nominal depth 4 outperforms the deeper
+heuristic search, and the measured win rate at equal depth (9 wins / 4 draws
+out of 40) confirms the learned evaluation itself keeps improving with more
+MCTS data. The pipeline (self-play → train → plug into search → benchmark →
 iterate) works end-to-end and each piece is measurable.
 
 ### Ideas for going further
 
 - More self-play iterations (the loop above is designed for it); raise the
   MCTS teacher's iteration count (`mcts:1600`+).
-- Add a policy head and use it for move ordering / MCTS priors.
+- NN-vs-NN self-play iterations (AlphaZero's actual loop; so far the teacher
+  has been pure MCTS).
+- Use the policy head as MCTS priors (PUCT) instead of only for move ordering.
 - Tune `nn_depth` in `src/ai/nn.pl` (speed/strength trade-off).

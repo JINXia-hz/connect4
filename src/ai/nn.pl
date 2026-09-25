@@ -49,6 +49,17 @@ nn_clean_all :-
 % deep-search opponents; 4 is the default strength/speed trade-off.
 nn_depth(4).
 
+% Minimum search depth at which the NN policy head is used for move
+% ordering (one policy py_call per such node, cached bridge-side).
+% Deeper (nearer-leaf) nodes keep the center-based order for speed.
+% Dynamic so it is tunable at runtime (e.g. 99 disables policy ordering).
+:- dynamic nn_policy_order_min_depth/1.
+nn_policy_order_min_depth(2).
+
+set_nn_policy_order_min_depth(D) :-
+    retractall(nn_policy_order_min_depth(_)),
+    assertz(nn_policy_order_min_depth(D)).
+
 % Main entry point for the NN AI to make a move.
 nn_ia_play(Board, Heights, Player, BestCol) :-
     nn_depth(Depth),
@@ -112,7 +123,7 @@ nn_alpha_beta(Board, Heights, Player, Depth, Alpha, Beta, BestMove, BestScore) :
     not_stable(Board, Heights),
     !,
     NewDepth is Depth - 1,
-    nn_get_ordered_moves(Board, Heights, Player, Moves),
+    nn_get_ordered_moves(Board, Heights, Player, NewDepth, Moves),
     (Moves = [] ->
         BestMove = -1, BestScore = 0
     ;
@@ -144,7 +155,7 @@ nn_alpha_beta(Board, _, _, _, _, _, -1, 0) :-
 % 8. Recursive Step (The Search Loop)
 nn_alpha_beta(Board, Heights, Player, Depth, Alpha, Beta, BestMove, BestScore) :-
     Depth > 0,
-    nn_get_ordered_moves(Board, Heights, Player, Moves),
+    nn_get_ordered_moves(Board, Heights, Player, Depth, Moves),
     (Moves = [] ->
         BestMove = -1, BestScore = 0
     ;
@@ -194,22 +205,40 @@ nn_process_result(_, _, RestCols, Board, Heights, Player, Depth, Alpha, Beta,
 %     HELPERS
 % ==============================================================================
 
-% Move Ordering: NN-TT best move first, otherwise center columns first
-% (ordered_valid_moves/2 from minimax.pl). Improves pruning.
-nn_get_ordered_moves(Board, Heights, _Player, OrderedMoves) :-
+% Move Ordering: NN-TT best move first; the remaining valid moves are
+% ordered by the NN policy head (probability descending) at near-root
+% nodes (Depth >= nn_policy_order_min_depth), or center-first deeper.
+% Improves pruning. Falls back to center order if Python/Janus fails.
+nn_get_ordered_moves(Board, Heights, Player, Depth, OrderedMoves) :-
     ordered_valid_moves(Heights, ValidMoves),
 
     term_hash(Board, Hash),
     (nn_memory_table(Hash, Board, _, _, _, BestMove) ->
         (member(BestMove, ValidMoves) ->
             select(BestMove, ValidMoves, Rest),
-            OrderedMoves = [BestMove | Rest]
+            TtOrdered = [BestMove | Rest]
         ;
-            OrderedMoves = ValidMoves
+            TtOrdered = ValidMoves
         )
     ;
-        OrderedMoves = ValidMoves
+        TtOrdered = ValidMoves
+    ),
+
+    (   nn_policy_order_min_depth(MinDepth),
+        Depth >= MinDepth,
+        catch(py_call(bridge:policy(Board, Player), Probs), _, fail)
+    ->  order_by_policy(TtOrdered, Probs, OrderedMoves)
+    ;   OrderedMoves = TtOrdered
     ).
+
+% Order columns by policy probability descending (keysort is stable,
+% so ties keep the incoming order). Probs covers all 7 columns;
+% only the valid ones are ordered here (full columns already masked).
+order_by_policy(Moves, Probs, Ordered) :-
+    findall(P-C, (member(C, Moves), nth1(C, Probs, P)), Pairs),
+    keysort(Pairs, Asc),
+    reverse(Asc, Desc),
+    findall(C, member(_-C, Desc), Ordered).
 
 % --- Transposition Table Helpers ---
 % t_satisfies/4 and determine_flag/4 from minimax.pl are reused as-is:

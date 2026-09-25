@@ -457,6 +457,29 @@ test(nn_eval_returns_integer, [setup(nn_clean_all), cleanup(nn_clean_all)]) :-
     nn_eval(B, 'x', Score),
     integer(Score).
 
+% Policy-guided move ordering returns a permutation of the valid columns
+% (the order itself depends on the current policy head).
+test(policy_ordering_returns_permutation, [setup(nn_clean_all), cleanup(nn_clean_all)]) :-
+    tb_midgame(B, H),
+    nn_get_ordered_moves(B, H, 'x', 3, Ordered),
+    ordered_valid_moves(H, Valid),
+    msort(Ordered, Sorted),
+    msort(Valid, Sorted).
+
+% With policy ordering disabled (min depth 99), the TT-first/center-order
+% fallback path also returns a permutation of the valid columns.
+test(policy_ordering_fallback_returns_permutation,
+     [setup(nn_clean_all), cleanup(nn_clean_all)]) :-
+    tb_midgame(B, H),
+    nn_policy_order_min_depth(Old),
+    setup_call_cleanup(
+        set_nn_policy_order_min_depth(99),
+        ( nn_get_ordered_moves(B, H, 'x', 3, Ordered),
+          ordered_valid_moves(H, Valid),
+          msort(Ordered, Sorted),
+          msort(Valid, Sorted) ),
+        set_nn_policy_order_min_depth(Old)).
+
 :- end_tests(ai_nn).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -544,12 +567,14 @@ test(mcts_teacher_smoke,
     Lines = [_|_],                          % non-empty file
     forall(member(Line, Lines), valid_data_line(Line)).
 
-% One data line: "<board42> <x|o> <1|-1|0>"
+% One data line: "<board42> <x|o> <1|-1|0> <move>" where move is the
+% AI-chosen column 1-7, or '-' for random (opening/exploration) moves
 valid_data_line(Line) :-
-    split_string(Line, " ", " ", [Board, Player, Result]),
+    split_string(Line, " ", " ", [Board, Player, Result, Move]),
     string_length(Board, 42),
     member(Player, ["x", "o"]),
-    member(Result, ["1", "-1", "0"]).
+    member(Result, ["1", "-1", "0"]),
+    member(Move, ["-", "1", "2", "3", "4", "5", "6", "7"]).
 
 :- end_tests(selfplay).
 
