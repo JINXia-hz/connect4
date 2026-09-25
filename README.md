@@ -189,6 +189,62 @@ out of 40) confirms the learned evaluation itself keeps improving with more
 MCTS data. The pipeline (self-play → train → plug into search → benchmark →
 iterate) works end-to-end and each piece is measurable.
 
+### The league experiment (iterated self-play)
+
+`ml/league.py` automates the loop above as a three-way league: each round the
+NN, the heuristic minimax and MCTS play a round-robin with random openings;
+every game is recorded (value labels for all positions, policy labels only for
+moves chosen by MCTS or the NN — never for hand-written moves, so the network
+cannot absorb the heuristic's rules); the network is retrained on the
+accumulated pool; then the new model is evaluated against all three opponents.
+If the NN's win rate against the original minimax clears the threshold for two
+consecutive rounds, the opponents level up (minimax depth +1, MCTS iterations
+×2) — a curriculum that ends when the shallow NN search reliably beats the
+original minimax.
+
+```sh
+py ml/league.py --rounds 8 --games-per-pairing 8 --workers 5
+```
+
+Two lessons from the first league run (v1), both fixed before v2:
+
+- **Warm-start training memorizes.** With an almost-static dataset, 25
+  warm-started epochs per round pushed policy top-1 accuracy to 85 % and
+  collapsed playing strength (the league's "best" model lost 0–20 under the
+  standard benchmark protocol). Every round now trains from scratch.
+- **Self-play data must come from the best checkpoint, not the latest.** One
+  degraded round poisoned the data pool in v1. v2 starts each round from
+  `ml/model_best.pt` and updates it immediately when a new best is found.
+
+League v2 results (8 rounds, strict protocol — 4 random opening moves, 10
+evaluation games per pairing; win rates of the freshly trained model):
+
+| Round | vs heuristic | vs mcts:400 | vs original |
+|---|---|---|---|
+| 1 | 0.10 | 0.40 | 0.10 (best) |
+| 2 | 0.05 | 0.05 | 0.00 |
+| 3 | 0.25 | 0.30 | 0.10 |
+| 4 | 0.00 | 0.25 | **0.25 (best)** |
+| 5 | 0.25 | 0.20 | 0.00 |
+| 6 | 0.00 | 0.10 | 0.20 |
+| 7 | 0.20 | 0.15 | 0.05 |
+| 8 | 0.05 | 0.40 | 0.20 |
+
+Honest conclusion: the league machinery works (round-robin generation,
+from-scratch retraining, best-checkpoint tracking, curriculum triggers), but at
+this scale — ~200 new positions per round and 10-game evaluations (±15 %
+sampling noise) — there is no measurable iteration-over-iteration improvement,
+and the convergence rule (two consecutive rounds ≥ 0.7 vs the original) was
+never approached. Rechecking the league's best checkpoint (round 4) under the
+standard benchmark protocol confirms this: it lost **0–10** to the original
+minimax, far below v5. `ml/model.pt` was therefore restored to the v5 recipe
+(excluding league data, train from scratch — bit-identical val metrics, as the
+pipeline is fully seeded). The reliable strength result remains v5's 15–5
+under the standard benchmark protocol. Levers for a future run: far more games
+per round, 20+ evaluation games per pairing, a stronger teacher (`mcts:1600`),
+or simply more iterations of the proven recipe — MCTS-teacher data plus
+train-from-scratch.
+
 ### Ideas for going further
 
 - More self-play iterations (the loop above is designed for it); raise the
