@@ -4,8 +4,11 @@
 %%%  neural-network AI. Plays games     %%%
 %%%  between heuristic, NN and/or MCTS  %%%
 %%%  agents and writes one training     %%%
-%%%  line per recorded position.        %%%
-%%%  Main predicates: gen_games/3       %%%
+%%%  line per recorded position. Also   %%%
+%%%  provides recording-free evaluation %%%
+%%%  matches (play_match/7).            %%%
+%%%  Main predicates: gen_games/3,      %%%
+%%%  play_match/7                       %%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 :- use_module(library(random)).
@@ -17,9 +20,10 @@
 
 % gen_games(N, OutFile, spec((K1,D1), (K2,D2), Epsilon, OpenRandom))
 % Play N games: player x uses spec (K1,D1), player o uses (K2,D2).
-% K is 'heuristic' (minimax.pl's alpha_beta/8), 'nn' (nn_alpha_beta/8)
-% or 'mcts' (MCTS with D iterations per move, used as a teacher so the
-% NN never learns from the hand-written heuristic).
+% K is 'heuristic' (minimax.pl's alpha_beta/8), 'nn' (nn_alpha_beta/8),
+% 'mcts' (MCTS with D iterations per move, used as a teacher so the
+% NN never learns from the hand-written heuristic) or 'original'
+% (full-strength adaptive minimax ia_play/4; D ignored, use 0).
 % Epsilon is the random-move probability (exploration); the first
 % OpenRandom plies of each game are fully random.
 gen_games(N, OutFile, Spec) :-
@@ -49,6 +53,50 @@ gen_games_loop(I, N, Spec, Stream) :-
 gen_games_loop(_, _, _, _).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%     EVALUATION MATCHES              %%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% play_match(Spec1, Spec2, N, OpenRandom, Wins1, Wins2, Draws)
+% Play N games WITHOUT recording positions: Spec1 and Spec2 are (Kind,Param)
+% pairs; game 1 has Spec1 as x, game 2 Spec2 as x, alternating. Epsilon is
+% 0; the first OpenRandom plies of each game are uniform random. Ends by
+% printing a machine-readable "MATCH_RESULT W1 W2 D" line.
+play_match(Spec1, Spec2, N, OpenRandom, Wins1, Wins2, Draws) :-
+    once(play_match_loop(1, N, Spec1, Spec2, OpenRandom, 0, 0, 0, Wins1, Wins2, Draws)),
+    format('MATCH_RESULT ~w ~w ~w~n', [Wins1, Wins2, Draws]),
+    flush_output.
+
+play_match_loop(I, N, _, _, _, W1, W2, D, W1, W2, D) :-
+    I > N, !.
+play_match_loop(I, N, Spec1, Spec2, OpenR, WA0, WB0, D0, WA, WB, D) :-
+    % Alternate sides: odd games Spec1 is x, even games Spec2 is x
+    (I mod 2 =:= 1 ->
+        GameSpec = spec(Spec1, Spec2, 0.0, OpenR), Spec1IsX = true
+    ;
+        GameSpec = spec(Spec2, Spec1, 0.0, OpenR), Spec1IsX = false
+    ),
+    empty_state(Board, Heights),
+    play_game(Board, Heights, 'x', 1, GameSpec, false, [], _, Winner),
+    % Reset both transposition tables and the Python eval cache between games
+    clean_all,
+    nn_clean_all,
+    winner_index(Winner, Spec1IsX, W),
+    (W == 1 -> WA1 is WA0 + 1, WB1 = WB0, D1 = D0
+    ; W == 2 -> WB1 is WB0 + 1, WA1 = WA0, D1 = D0
+    ; D1 is D0 + 1, WA1 = WA0, WB1 = WB0),
+    format('match game ~w/~w: winner ~w~n', [I, N, W]),
+    flush_output,
+    I1 is I + 1,
+    play_match_loop(I1, N, Spec1, Spec2, OpenR, WA1, WB1, D1, WA, WB, D).
+
+% Map the winning mark to the winning spec index (1, 2 or draw)
+winner_index(draw, _, draw) :- !.
+winner_index('x', true, 1) :- !.
+winner_index('o', true, 2) :- !.
+winner_index('x', false, 2) :- !.
+winner_index('o', false, 1).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%     ONE GAME                        %%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -66,19 +114,30 @@ empty_state(Board, Heights) :-
 
 % Game loop: Mark is the side to move, Ply the current ply number.
 % Every position is recorded (side to move + board + chosen move);
-% the move is '-' when it came from the random opening or from
-% epsilon-exploration (not usable as a policy target).
+% the move is '-' when it came from the random opening, from
+% epsilon-exploration, or from a hand-written-rules agent
+% (heuristic / original): those must NOT become policy labels.
 play_game(Board, Heights, Mark, Ply, Spec, Acc, Positions, Winner) :-
+    play_game(Board, Heights, Mark, Ply, Spec, true, Acc, Positions, Winner).
+
+% play_game(+Board, +Heights, +Mark, +Ply, +Spec, +Record, +Acc, -Positions, -Winner)
+% Record = true: accumulate positions; Record = false: play without
+% recording (evaluation matches).
+play_game(Board, Heights, Mark, Ply, Spec, Record, Acc, Positions, Winner) :-
     (game_end(Board, Winner) ->
         Positions = Acc
     ;
         choose_move(Spec, Mark, Ply, Board, Heights, Col, Source),
-        (Source == ai -> MoveField = Col ; MoveField = '-'),
-        Acc1 = [pos(Board, Mark, MoveField) | Acc],
+        (Record == true ->
+            (Source == ai -> MoveField = Col ; MoveField = '-'),
+            Acc1 = [pos(Board, Mark, MoveField) | Acc]
+        ;
+            Acc1 = Acc
+        ),
         simulate_move(Board, Heights, Mark, Col, NewBoard, NewHeights),
         ai_change_player(Mark, NextMark),
         Ply1 is Ply + 1,
-        play_game(NewBoard, NewHeights, NextMark, Ply1, Spec, Acc1, Positions, Winner)
+        play_game(NewBoard, NewHeights, NextMark, Ply1, Spec, Record, Acc1, Positions, Winner)
     ).
 
 % Winner is 'x', 'o' or 'draw'
@@ -95,7 +154,9 @@ game_end(Board, draw) :-
 
 % Opening plies are uniform random; after that, move randomly with
 % probability Epsilon (exploration), otherwise let the AI play.
-% Source is 'ai' when the column was chosen by the AI, 'random' otherwise.
+% Source is 'ai' when the column was chosen by an AI whose moves may
+% become policy labels (nn, mcts), 'unlabeled_ai' for hand-written-rules
+% agents (heuristic, original), 'random' for random moves.
 choose_move(Spec, Mark, Ply, Board, Heights, Col, Source) :-
     Spec = spec(P1, P2, Eps, OpenR),
     (Mark == 'x' -> PlayerSpec = P1 ; PlayerSpec = P2),
@@ -110,9 +171,19 @@ choose_move(Spec, Mark, Ply, Board, Heights, Col, Source) :-
         ai_move(PlayerSpec, Board, Heights, Mark, Col, Source)
     ).
 
-% Heuristic AI: fixed-depth alpha-beta from minimax.pl
-ai_move((heuristic, D), Board, Heights, Mark, Col, ai) :-
+% Heuristic AI: fixed-depth alpha-beta from minimax.pl. Hand-written
+% rules must not become policy labels -> Source = unlabeled_ai.
+ai_move((heuristic, D), Board, Heights, Mark, Col, unlabeled_ai) :-
     catch(alpha_beta(Board, Heights, Mark, D, -9999999, 9999999, Col0, _), _, fail),
+    valid_column(Heights, Col0), !,
+    Col = Col0.
+
+% Original full-strength minimax (adaptive depth + panic + quiescence,
+% ia_play/4): the fixed reference ruler. The numeric parameter is accepted
+% for spec uniformity and ignored. Hand-written rules must not become
+% policy labels -> Source = unlabeled_ai.
+ai_move((original, _), Board, Heights, Mark, Col, unlabeled_ai) :-
+    catch(with_output_to(atom(_), ia_play(Board, Heights, Mark, Col0)), _, fail),
     valid_column(Heights, Col0), !,
     Col = Col0.
 
@@ -159,8 +230,9 @@ valid_column(Heights, Col) :-
 % One line per recorded position: "<board42> <player> <result> <move>"
 % (contract with ml/encode.py: column-major, cols 1..7, rows 1..6 bottom-up;
 % result is from the recorded side-to-move's perspective: 1/-1/0;
-% move is the AI-chosen column 1..7, or '-' when the move was random
-% (opening / epsilon exploration / AI fallback) - not a policy target)
+% move is the chosen column 1..7 for nn/mcts agents, or '-' when the move
+% was random (opening / epsilon exploration / AI fallback) or chosen by a
+% hand-written-rules agent (heuristic / original) - not a policy target)
 write_positions(Stream, Positions, Winner) :-
     forall(member(pos(Board, Mark, Move), Positions),
            (result_for(Mark, Winner, Result),

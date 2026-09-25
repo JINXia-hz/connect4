@@ -4,6 +4,7 @@ ml/__pycache__/
 *.pt
 *.pyc
 __pycache__/
+league_log.txt
 
 # Editor / OS
 *~

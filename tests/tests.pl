@@ -576,6 +576,28 @@ valid_data_line(Line) :-
     member(Result, ["1", "-1", "0"]),
     member(Move, ["-", "1", "2", "3", "4", "5", "6", "7"]).
 
+% play_match/7 plays N evaluation games and tallies every one of them
+% exactly once: wins for spec1 + wins for spec2 + draws must equal N.
+test(play_match_tallies_sum) :-
+    with_output_to(atom(_),
+                   play_match((mcts,50), (heuristic,2), 2, 2, W1, W2, D)),
+    Total is W1 + W2 + D,
+    Total =:= 2.
+
+% Hand-written-rules players (heuristic/original) must never become policy
+% labels: every recorded position in a heuristic-vs-heuristic game carries
+% '-' as its move field.
+test(heuristic_moves_not_labeled,
+     [cleanup(catch(delete_file('data/test_h.txt'), _, true))]) :-
+    gen_games(1, 'data/test_h.txt', spec((heuristic,2), (heuristic,2), 0.1, 4)),
+    read_file_to_string('data/test_h.txt', Content, []),
+    split_string(Content, "\n", " \t\r", RawLines),
+    exclude(==(""), RawLines, Lines),
+    Lines = [_|_],
+    forall(member(Line, Lines),
+           ( split_string(Line, " ", " ", [_, _, _, Move]),
+             Move == "-" )).
+
 :- end_tests(selfplay).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

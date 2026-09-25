@@ -59,6 +59,10 @@ def main():
     ap.add_argument('--batch', type=int, default=256)
     ap.add_argument('--lr', type=float, default=1e-3)
     ap.add_argument('--seed', type=int, default=42)
+    ap.add_argument('--init', default=None,
+                    help="optional checkpoint to warm-start from (league mode: "
+                         "continue from the previous round instead of training "
+                         "from scratch)")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -72,6 +76,10 @@ def main():
     tr, va = perm[:split], perm[split:]
 
     model = Connect4Net()
+    if args.init and os.path.exists(args.init):
+        model.load_state_dict(torch.load(args.init, map_location='cpu',
+                                         weights_only=True))
+        print(f"warm-started from {args.init}")
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     mse_fn = nn.MSELoss()
 
